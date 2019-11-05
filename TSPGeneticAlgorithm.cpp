@@ -9,26 +9,28 @@
 #define TSP_GA_DEBUG_REPORT(file, line) (std::cout << "ERROR: file " << file << ", line " << line << std::endl)
 #endif /* TSP_GA_DEBUG */
 
-TSPGeneticAlgorithm::TSPGeneticAlgorithm(int generationSize, int crossoverRate, int tournamentSize, double mutationRate) :
+TSPGeneticAlgorithm::TSPGeneticAlgorithm(int generations, int generationSize, int crossoverRate, int tournamentSize, double mutationRate) :
+	generations(generations),
 	generationSize(generationSize),
 	tournamentSize(tournamentSize),
 	crossoverRate(crossoverRate),
 	mutationRate(mutationRate) {
 }
 
-TSPGeneticAlgorithm* TSPGeneticAlgorithm::createTSPGeneticAlgorithm(int generationSize, int crossoverRate, int tournamentSize, double mutationRate) {
+TSPGeneticAlgorithm* TSPGeneticAlgorithm::create(int generations, int generationSize, int crossoverRate, int tournamentSize, double mutationRate) {
 	// make sure that generation size is even as crossover operation always builds pairs of children
 	if (generationSize % 2 != 0)
 		generationSize++;
 	
-	if (generationSize - crossoverRate < tournamentSize - 1 ||	// otherwise it would be impossible to arrange tournament
-		generationSize < MIN_GEN_SIZE			 ||	// minimum possible size of generation to run the algorithm
-		generationSize < crossoverRate			 ||	// impossible to cross more genomes then we have in generation
+	if (generations < 0 ||	// number of generations can't be negative
+		generationSize - crossoverRate < tournamentSize - 1 ||	// otherwise it would be impossible to arrange tournament
+		generationSize < MIN_GEN_SIZE  ||	// minimum possible size of generation to run the algorithm
+		generationSize < crossoverRate ||	// impossible to cross more genomes then we have in generation
 		tournamentSize < 0 ||	// tournament size can't be negative
 		mutationRate   < 0.0)	// mutation rate cant' be negative
 		return nullptr;
 
-	return new TSPGeneticAlgorithm(generationSize, crossoverRate, tournamentSize, mutationRate);
+	return new TSPGeneticAlgorithm(generations, generationSize, crossoverRate, tournamentSize, mutationRate);
 }
 
 TSPGenome** TSPGeneticAlgorithm::createNextGeneration(int citiesNumber, TSPGenome** currentGeneration) {
@@ -37,51 +39,48 @@ TSPGenome** TSPGeneticAlgorithm::createNextGeneration(int citiesNumber, TSPGenom
 
 	// creation of initial generation
 	if (currentGeneration == nullptr) {
-		for (int i = 0; i < generationSize; ++i)
+		for (int i = 0; i < generationSize; ++i) {
 			nextGeneration[i] = new TSPGenome(citiesNumber);
+			nextGeneration[i]->randomizeGenome();
+		}
 		return nextGeneration;
 	}
 
 	// get new array of selected genomes for crossing
-	TSPGenome** selection = Selection(currentGeneration);
+	TSPGenome** selected = selection(currentGeneration);
 
 	// each step of cycle adds 2 new children to the next generation
 	for (int genomeSize = citiesNumber - 1, i = 0; i + 1 < generationSize; i += 2) {
 
 		// get 2 random parents for crossing
-		int  firstParent = rand() % crossoverRate;
-		int secondParent = rand() % crossoverRate;
+		int parent1 = rand() % crossoverRate;
+		int parent2 = rand() % crossoverRate;
 
 		// if indexes matched then simply assign second to 0 if first isn't 0, 1 otherwise
 		// (to avoid long search of another random)
-		if (firstParent == secondParent)
-			secondParent = (firstParent == 0) ? 1 : 0;
+		if (parent1 == parent2)
+			parent2 = (parent1 == 0) ? 1 : 0;
 
-		// allocate memory for children genomes
-		gene_t* child1 = new gene_t[genomeSize];
-		gene_t* child2 = new gene_t[genomeSize];
-
-		// fill chidren genomes array with new genes via crossover operation
-		int const* keyParent1 = selection[firstParent]->getKeyGenome();
-		gene_t const* parent2 = selection[secondParent]->getGenome();
-		//Crossover(selection[firstParent]->getKeyGenome, selection[secondParent]->getGenome, child1, child2, genomeSize);
-		Crossover(keyParent1, parent2, child1, child2, genomeSize);
+		// create chidren genomes and fill them with new genes via crossover operation
+		TSPGenome* child1 = new TSPGenome(citiesNumber);
+		TSPGenome* child2 = new TSPGenome(citiesNumber);
+		crossover(selected[parent1], selected[parent2], child1, child2, genomeSize);
 
 		// apply mutation for minor changes (mutationRate supposed to be low)
-		Mutate(child1, genomeSize);
-		Mutate(child2, genomeSize);
+		child1->mutate(mutationRate);
+		child2->mutate(mutationRate);
 
 		// add new children to the next generation
-		nextGeneration[i]	  = new TSPGenome(citiesNumber, child1);
-		nextGeneration[i + 1] = new TSPGenome(citiesNumber, child2);
+		nextGeneration[i] = child1;
+		nextGeneration[i + 1] = child2;
 	}
 
 	// don't forget to free memory allocated for selected parents in Selection method
-	delete[] selection;
+	delete[] selected;
 	return nextGeneration;
 }
 
-TSPGenome** TSPGeneticAlgorithm::Selection(TSPGenome** generation) {
+TSPGenome** TSPGeneticAlgorithm::selection(TSPGenome** generation) {
 	// create array of pointers to TSPGenome of selected genomes to take part in further crossover
 	TSPGenome** selection = new TSPGenome*[crossoverRate];
 
@@ -96,46 +95,70 @@ TSPGenome** TSPGeneticAlgorithm::Selection(TSPGenome** generation) {
 #endif /* TSP_GA_DEBUG */
 
 		// set index of new winner genome of tournament
-		winner = Tournament(generation, generationSize - i);
+		winner = tournament(generation, generationSize - i);
 		selection[i] = generation[winner];
 
+		int a = selection[i]->getFitness();
 		// swap winner and the last genome in generation array to avoid winner's multiple selection
-		SwapGenomes(generation, winner, generationSize - (i + 1));
+		swapGenomes(generation, winner, generationSize - (i + 1));
 	}
 
 	return selection;
 }
 
-int TSPGeneticAlgorithm::Tournament(TSPGenome** generation, int remainingPopulationSize) {
-	// set initial minimum
-	int minimum = generation[0]->getFitness();
+int TSPGeneticAlgorithm::tournament(TSPGenome** generation, int remainingGenerationSize) {
+	// set initial winner
 	int winner  = 0;
 
 #ifdef TSP_GA_DEBUG
-	if (tournamentSize > remainingPopulationSize) {
+	if (tournamentSize > remainingGenerationSize) {
+		TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
+		exit(-1);
+	}
+
+	int* compared = new int[tournamentSize + 1];
+	compared[0] = generation[0]->getFitness();
+#endif /* TSP_GA_DEBUG */
+
+	// select one genome with minimum fitness from tournamentSize random genomes
+	for (int i = 0; i < tournamentSize; ++i) {
+		// get random genomes excluding those in the end that have already been compared
+		int random = std::rand() % (remainingGenerationSize - i);
+
+		// compare chosen genome's fitness with current winner's
+		if (generation[winner]->getFitness() > generation[random]->getFitness())
+			winner = random;
+
+#ifdef TSP_GA_DEBUG
+		compared[i + 1] = generation[random]->getFitness();
+#endif /* TSP_GA_DEBUG */
+
+		// swap compared random genome with the last not compared to avoid multiple comparation
+		swapGenomes(generation, random, remainingGenerationSize - (i + 1));
+
+		// if winner was swapped then assign it to the new index
+		if (winner == random)
+			winner = remainingGenerationSize - (i + 1);
+	}
+
+#ifdef TSP_GA_DEBUG
+	int min = compared[0];
+	for (int i = 1; i < tournamentSize + 1; ++i) {
+		if (min > compared[i])
+			min = compared[i];
+	}
+	delete[] compared;
+
+	if (min != generation[winner]->getFitness()) {
 		TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
 		exit(-1);
 	}
 #endif /* TSP_GA_DEBUG */
 
-	// select one genome with minimum fitness from tournamentSize random genomes
-	for (int i = 0; i < tournamentSize; ++i) {
-		// get random genomes excluding those in the beginning that have already been compared
-		int random = std::rand() % (remainingPopulationSize - i) + i;
-
-		// compare chosen genome's fitness with current minimum
-		if (minimum > generation[random]->getFitness()) {
-			minimum = generation[random]->getFitness();
-			winner  = random;
-		}
-		// swap compared random genome with the first not compared to avoid multiple comparation
-		SwapGenomes(generation, random, i);
-	}
-
 	return winner;
 }
 
-void TSPGeneticAlgorithm::SwapGenomes(TSPGenome** generation, int i, int j) {
+void TSPGeneticAlgorithm::swapGenomes(TSPGenome** generation, int i, int j) {
 	TSPGenome* temp = generation[i];
 	generation[i] = generation[j];
 	generation[j] = temp;
@@ -154,7 +177,7 @@ Step 5. Repeat Steps  3 and 4 till 1st bit of first parent will not come in 
 		and process may be terminated.
 Step 6. If some bits are left, then the same bits in first parent and in second offspring till now and vice versa
 		are left out from both parents. For remaining bits repeat Steps  2, 3, and 4 to complete the process.*/
-void TSPGeneticAlgorithm::Crossover(int const* keyParent1, gene_t const* parent2, gene_t* child1, gene_t* child2, int genomeSize) {
+void TSPGeneticAlgorithm::crossover(TSPGenome* parent1, TSPGenome* parent2, TSPGenome* child1, TSPGenome* child2, int genomeSize) {
 	// create array of indexes of genes in parent genome, added to genome of first child
 	bool* checked = new bool[genomeSize];
 
@@ -163,46 +186,46 @@ void TSPGeneticAlgorithm::Crossover(int const* keyParent1, gene_t const* parent2
 		checked[i] = false;
 
 	// here algorithm starts with step 1 already accomplished with method call
-	int firstGeneIndex = 0;
-	int  currGeneIndex = 0;
+	int first = 0;	// index of the first parent gene processed
+	int  curr = 0;	// index of the current parent gene processed
 
 	// step 2: select first bit of first offspring
-	child1[0] = parent2[currGeneIndex];
+	child1->setGene(0, parent2->getGene(curr));
 	checked[0] = true;
 
 	// step 3: select first bit of second offspring
-	currGeneIndex = keyParent1[parent2[currGeneIndex] - 1];
-	currGeneIndex = keyParent1[parent2[currGeneIndex] - 1];
-	child2[0] = parent2[currGeneIndex];
+	curr = parent1->getIndex(parent2->getGene(curr));
+	curr = parent1->getIndex(parent2->getGene(curr));
+	child2->setGene(0, parent2->getGene(curr));
 
 	// repeat steps 3 - 4: select next bits for children
 	for (int i = 1; i < genomeSize; ++i) {
 
 		// step 5: start new cycle
-		if (keyParent1[child2[i - 1] - 1] == firstGeneIndex) {
+		if (parent1->getIndex(child2->getGene(i - 1)) == first) {
 			int j;
 			for (j = 0; j < genomeSize; ++j) {
 				// step 6: repeat steps 2 and 3 - 4 for remaining bits
 				if (checked[j] == false) {
 					// set first gene index of new cycle
-					firstGeneIndex = j;
-					currGeneIndex  = j;
+					first = j;
+					curr  = j;
 
 #ifdef TSP_GA_DEBUG
-					if (checked[currGeneIndex] == true) {
+					if (checked[curr] == true) {
 						TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
 						exit(-1);
 					}
 #endif /* TSP_GA_DEBUG */
 
 					// step 2: select next bit of first offspring
-					child1[i] = parent2[currGeneIndex];
-					checked[currGeneIndex] = true;
+					child1->setGene(i, parent2->getGene(curr));
+					checked[curr] = true;
 
 					// step 3: select next bit of second offspring
-					currGeneIndex = keyParent1[parent2[currGeneIndex] - 1];
-					currGeneIndex = keyParent1[parent2[currGeneIndex] - 1];
-					child2[i] = parent2[currGeneIndex];
+					curr = parent1->getIndex(parent2->getGene(curr));
+					curr = parent1->getIndex(parent2->getGene(curr));
+					child2->setGene(i, parent2->getGene(curr));
 					break;
 				}
 			}
@@ -218,31 +241,31 @@ void TSPGeneticAlgorithm::Crossover(int const* keyParent1, gene_t const* parent2
 		}
 		
 		// step 4
-		currGeneIndex = keyParent1[parent2[currGeneIndex] - 1];
+		curr = parent1->getIndex(parent2->getGene(curr));
 
 #ifdef TSP_GA_DEBUG
-		if (checked[currGeneIndex] == true) {
+		if (checked[curr] == true) {
 			TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
 			exit(-1);
 		}
 #endif /* TSP_GA_DEBUG */
 
-		child1[i] = parent2[currGeneIndex];
+		child1->setGene(i, parent2->getGene(curr));
 
 		// mark current parent's bit as checked
-		checked[currGeneIndex] = true;
+		checked[curr] = true;
 
 		// step 3
-		currGeneIndex = keyParent1[parent2[currGeneIndex] - 1];
-		currGeneIndex = keyParent1[parent2[currGeneIndex] - 1];
-		child2[i] = parent2[currGeneIndex];
-
+		curr = parent1->getIndex(parent2->getGene(curr));
+		curr = parent1->getIndex(parent2->getGene(curr));
+		child2->setGene(i, parent2->getGene(curr));
 	}
 
 #ifdef TSP_GA_DEBUG
-	gene_t* temp = new gene_t[genomeSize];
+	int* temp = new int[genomeSize];
 
-	std::memcpy(temp, child1, sizeof(gene_t) * genomeSize);
+	for (int i = 0; i < genomeSize; ++i)
+		temp[i] = child1->getGene(i);
 	std::sort(temp, temp + genomeSize);
 	for (int i = 0; i < genomeSize - 1; ++i) {
 		if (temp[i] + 1 != temp[i + 1]) {
@@ -252,7 +275,8 @@ void TSPGeneticAlgorithm::Crossover(int const* keyParent1, gene_t const* parent2
 		}
 	}
 
-	std::memcpy(temp, child2, sizeof(gene_t) * genomeSize);
+	for (int i = 0; i < genomeSize; ++i)
+		temp[i] = child2->getGene(i);
 	std::sort(temp, temp + genomeSize);
 	for (int i = 0; i < genomeSize - 1; ++i) {
 		if (temp[i] + 1 != temp[i + 1]) {
@@ -266,83 +290,62 @@ void TSPGeneticAlgorithm::Crossover(int const* keyParent1, gene_t const* parent2
 #endif /* TSP_GA_DEBUG */
 }
 
-void TSPGeneticAlgorithm::Mutate(gene_t* genome, int genomeSize) {
-#ifdef TSP_GA_DEBUG
-	if (genome == nullptr) {
-		TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
-		exit(-1);
+int TSPGeneticAlgorithm::findFittestGenome(TSPGenome const* const* generation) {
+	int min = 0;
+	for (int i = 0; i < generationSize; ++i) {
+		if (generation[min]->getFitness() > generation[i]->getFitness())
+			min = i;
 	}
-#endif /* TSP_GA_DEBUG */
 
-	// generate random double number from [0, 1] interval
-	double random = (double)rand() / ((double)RAND_MAX + 1.0);
+	return min;
+}
 
-	// if this value exceeds mutation rate
-	if (random > mutationRate) {
-		int firstIndex  = rand() % genomeSize;
-		int secondIndex = rand() % genomeSize;
+int TSPGeneticAlgorithm::run(int citiesNumber, int const** pricesMatrix, int* sequence) {
+	// create initial (random) generation
+	TSPGenome** currGeneration = createNextGeneration(citiesNumber);
 
-		// if indexes matched then simply assign second to 0 gene if first isn't 0, 1 otherwise
-		// (to avoid long search of another random for small genomes)
-		if (firstIndex == secondIndex) {
-			secondIndex = (firstIndex == 0) ? 1 : 0;
+	// calculate fitness of each genome in the generation
+	for (int i = 0; i < generationSize; ++i)
+		currGeneration[i]->recalculateFitness(pricesMatrix);
+
+	// save inital fittest solution
+	int min = findFittestGenome(currGeneration);
+	int answer = currGeneration[min]->getFitness();
+	for (int i = 0; i < citiesNumber - 1; ++i)
+		sequence[i] = currGeneration[min]->getGene(i);
+
+	// start reproducing next generations
+	for (int i = 0; i < generations; ++i) {
+		TSPGenome** nextGeneration = createNextGeneration(citiesNumber, currGeneration);
+
+		// recalculate fitness of each genome in the next generation
+		// and free memory allocated for previous one
+		for (int j = 0; j < generationSize; ++j) {
+			nextGeneration[j]->recalculateFitness(pricesMatrix);
+			delete currGeneration[j];
 		}
+		delete[] currGeneration;
 
-		// swap genes with firstIndex and secondIndex
-		gene_t temp = genome[firstIndex];
-		genome[firstIndex] = genome[secondIndex];
-		genome[secondIndex] = temp;
+		// assign new pointer
+		currGeneration = nextGeneration;
+
+		// save current fittest solution if needed
+		min = findFittestGenome(currGeneration);
+		if (answer > currGeneration[min]->getFitness()) {
+			answer = currGeneration[min]->getFitness();
+			for (int i = 0; i < citiesNumber - 1; ++i)
+				sequence[i] = currGeneration[min]->getGene(i);
+		}
 	}
+
+	// free memory allocated for last generation
+	for (int i = 0; i < generationSize; ++i)
+		delete currGeneration[i];
+	delete[] currGeneration;
+
+	return answer;
 }
 
 #ifdef TSP_GA_DEBUG
 #undef TSP_GA_DEBUG
 #endif /* TSP_GA_DEBUG */
-
-
-//TSPGenome** TSPGeneticAlgorithm::createNextGeneration(int citiesNumber, TSPGenome** currentGeneration) {
-//	TSPGenome** nextGeneration = new TSPGenome * [generationSize];
-//
-//	if (currentGeneration == nullptr) {
-//		for (int i = 0; i < generationSize; ++i)
-//			nextGeneration[i] = new TSPGenome(citiesNumber);
-//		return nextGeneration;
-//	}
-//
-//	int genomeSize = citiesNumber - 1;
-//	TSPGenome** selection = Selection(currentGeneration);
-//	int(*crossedPairs)[2] = new int[crossoverRate][2];
-//
-//	for (int i = 0; i < crossoverRate; i += 2) {
-//
-//		int firstParent = rand() % crossoverRate;
-//
-//		int secondParent = rand() % crossoverRate;
-//
-//		for (int j = 0; j < i; ++j) {
-//			// if such pair of parents has already been crossed 
-//			// (it's enough no check their roles as first and second)
-//			if (crossedPairs[j][0] == firstParent && crossedPairs[j][1] == secondParent) {
-//				// if indexes matched then simply assign second to 0 if first isn't 0, 1 otherwise
-//				// (to avoid long search of another randoms)
-//				// P.S. this won't save from repeat chance though
-//				secondParent = (firstParent == 0) ? 1 : 0;
-//			}
-//		}
-//
-//		gene_t* child1 = new gene_t[genomeSize];
-//		gene_t* child2 = new gene_t[genomeSize];
-//
-//		Crossover(selection[firstParent]->getKeyGenome, selection[secondParent]->getGenome, child1, child2, genomeSize);
-//		crossedPairs[i][0] = firstParent;
-//		crossedPairs[i][1] = secondParent;
-//
-//		Mutate(child1, genomeSize);
-//		Mutate(child2, genomeSize);
-//
-//		nextGeneration[i] = new TSPGenome(citiesNumber, child1);
-//		nextGeneration[i + 1] = new TSPGenome(citiesNumber, child2);
-//	}
-//
-//	return nextGeneration;
-//}

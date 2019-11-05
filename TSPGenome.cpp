@@ -1,47 +1,29 @@
 #include "TSPGenome.h"
 #include <random>
 
-#define TSP_GA_DEBUG
-
-#ifdef TSP_GA_DEBUG
-#include <iostream>
-#define TSP_GA_DEBUG_REPORT(file, line) (std::cout << "ERROR: file " << file << ", line " << line << std::endl)
-#endif /* TSP_DEBUG */
-
-TSPGenome::TSPGenome(int citiesNumber, gene_t* genome, int* keyGenome) :
+TSPGenome::TSPGenome(int citiesNumber) :
 	genomeSize(citiesNumber - 1),
-	genome(genome), 
-	keyGenome(keyGenome),
 	fitness(-1) /* not calculated */ {
-	if (genome == nullptr) {
-		this->genome = new gene_t[genomeSize];
-		randomizeGenome();
-	}
-	if (keyGenome == nullptr) {
-		this->keyGenome = new int[genomeSize];
-		fillKeyGenome();
-	}
+
+	this->genome  = new int[genomeSize];
+	this->indexes = new int[citiesNumber];	// 0 element of this array is excess
 }
 
-int TSPGenome::getFitness() const {
-#ifdef TSP_GA_DEBUG
-	if (fitness == -1) {
-		TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
-		exit(-1);
-	}
-#endif /* TSP_GA_DEBUG */
-	return fitness;
+void TSPGenome::randomizeGenome() {
+	// to create random genome simply add all cities numbers to genome array except for 0
+	for (int i = 0; i < genomeSize; ++i)
+		genome[i] = i + 1;
+
+	// and shuffle them using std::shuffle
+	std::shuffle(genome, genome + genomeSize, std::default_random_engine(std::rand()));
+
+	// thanks to this array of keys, index of k city in genome
+	// will be found by the addres indexes[genome[k]]
+	for (int i = 0; i < genomeSize; ++i)
+		indexes[genome[i]] = i;
 }
 
 void TSPGenome::recalculateFitness(int const** pricesMatrix) {
-
-#ifdef TSP_GA_DEBUG
-	if (pricesMatrix == nullptr || genome == nullptr) {
-		TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
-		exit(-1);
-	}
-#endif /* TSP_GA_DEBUG */
-
 	fitness = 0;
 	// calculate whole path cost 
 	for (int i = 0, currentCity = 0; i < genomeSize; ++i) {
@@ -52,46 +34,30 @@ void TSPGenome::recalculateFitness(int const** pricesMatrix) {
 	fitness += pricesMatrix[genome[genomeSize - 1]][0];
 }
 
+void TSPGenome::mutate(double mutationRate) {
+	// generate random double number from [0, 1] interval
+	double random = (double)std::rand() / ((double)RAND_MAX + 1.0);
 
-void TSPGenome::randomizeGenome() {
+	// if this value exceeds mutation rate
+	if (random > mutationRate) {
+		int  firstIndex = std::rand() % genomeSize;
+		int secondIndex = std::rand() % genomeSize;
 
-#ifdef TSP_GA_DEBUG
-	if (genome == nullptr) {
-		TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
-		exit(-1);
+		// if indexes matched then simply assign second to 0 gene if first isn't 0, 1 otherwise
+		// (to avoid long search of another random for small genomes)
+		if (firstIndex == secondIndex) {
+			secondIndex = (firstIndex == 0) ? 1 : 0;
+		}
+
+		// swap genes of first and second random indexes
+		// swap their keys in indexes array also
+		int tempGene  = genome[firstIndex];
+		int tempIndex = indexes[genome[firstIndex]];
+
+		genome[firstIndex] = genome[secondIndex];
+		indexes[genome[firstIndex]] = indexes[genome[secondIndex]];
+
+		genome[secondIndex] = tempGene;
+		indexes[genome[secondIndex]] = tempIndex;
 	}
-#endif /* TSP_GA_DEBUG */
-
-	//// to create random genome simply add all cities numbers to genome array
-	//for (int i = 0; i < startingCity; ++i)
-	//	genome[i] = i;
-	//// except for starting city number
-	//for (int i = startingCity + 1; i <= genomeSize; ++i)
-	//	genome[i - 1] = i;
-
-	// to create random genome simply add all cities numbers to genome array except for 0
-	for (int i = 1; i <= genomeSize; ++i)
-		genome[i - 1] = i;
-
-	// and shuffle them using std::shuffle
-	std::shuffle(genome, genome + genomeSize, std::default_random_engine(rand()));
 }
-
-void TSPGenome::fillKeyGenome() {
-
-#ifdef TSP_GA_DEBUG
-	if (genome == nullptr || keyGenome == nullptr) {
-		TSP_GA_DEBUG_REPORT(__FILE__, __LINE__);
-		exit(-1);
-	}
-#endif /* TSP_GA_DEBUG */
-
-	// thank to this array of keys index of k city in genome
-	// will be found by the addres keyGenome[genome[k] - 1]
-	for (int i = 0; i < genomeSize; ++i)
-		keyGenome[genome[i] - 1] = i;
-}
-
-#ifdef TSP_GA_DEBUG
-#undef TSP_GA_DEBUG
-#endif /* TSP_GA_DEBUG */
